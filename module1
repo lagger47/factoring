@@ -1,0 +1,956 @@
+Option Explicit
+
+Sub CreateAllRepaymentSheetsAndSummaryTables()
+    On Error GoTo ErrHandler
+    
+    Dim rawFilePath As String
+    Dim wbMain As Workbook
+    Dim wbMacro As Workbook
+    Dim wsRaw As Worksheet
+    Dim srcRange As Range
+    Dim controlDate As String
+    Dim controlDateValue As Date
+    Dim controlDateFormatted As String
+    Dim cumSplitDate As Date
+    Dim cumSplitDateFormatted As String
+    Dim colCustomerSimple As String
+    Dim colClearingDate As String
+    Dim colRepaymentDateYear As String
+    Dim colFactoredYearDate As String
+    Dim colBusinessArea As String
+    Dim colAmount As String
+    Dim colRepaymentYear As String
+    Dim uniqueID As String
+    Dim wsMapping As Worksheet
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Set wbMacro = ThisWorkbook
+    
+    On Error Resume Next
+    Set wsMapping = wbMacro.Sheets("mapping")
+    On Error GoTo ErrHandler
+    
+    If wsMapping Is Nothing Then
+        MsgBox "Mapping sheet not found in the macro file!" & vbCrLf & _
+               "Please ensure there is a sheet named 'mapping' in the macro file (.xlsm).", vbCritical
+        GoTo Cleanup
+    End If
+    
+    rawFilePath = Application.GetOpenFilename(FileFilter:="Excel Files (*.xls;*.xlsx;*.xlsm),*.xls;*.xlsx;*.xlsm", title:="Select Raw SAP Data File", MultiSelect:=False)
+    
+    If rawFilePath = "False" Then
+        MsgBox "No file selected. Process cancelled.", vbExclamation
+        GoTo Cleanup
+    End If
+    
+    controlDate = InputBox("Enter Control Date (MM/DD/YYYY):" & vbCrLf & "This date determines:" & vbCrLf & "1. Future Due for Repayment Date" & vbCrLf & "2. New Month payments for Clearing Date" & vbCrLf & "3. Max Factored Date for Cummins", "Control Date", Format(Date, "mm/dd/yyyy"))
+    
+    If controlDate = "" Then
+        controlDateValue = Date
+    Else
+        On Error Resume Next
+        controlDateValue = CDate(controlDate)
+        If Err.Number <> 0 Then
+            MsgBox "Invalid date format. Using today's date.", vbExclamation
+            controlDateValue = Date
+            Err.Clear
+        End If
+        On Error GoTo ErrHandler
+    End If
+    
+    controlDateFormatted = Format(controlDateValue, "yyyymmdd")
+    cumSplitDate = DateSerial(2025, 10, 3)
+    cumSplitDateFormatted = Format(cumSplitDate, "yyyymmdd")
+    uniqueID = Format(Now, "yyyymmddhhnnss")
+    
+    Set wbMain = Workbooks.Open(rawFilePath)
+    Set wsRaw = wbMain.Sheets(1)
+    
+    FindColumnHeaders_All wsRaw, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    
+    MsgBox "Columns Found:" & vbCrLf & "Customer Simple: " & colCustomerSimple & vbCrLf & "Clearing Date: " & colClearingDate & vbCrLf & "Repayment Date Year: " & colRepaymentDateYear & vbCrLf & "Factored Year with Date: " & colFactoredYearDate & vbCrLf & "Business Area: " & colBusinessArea & vbCrLf & "Amount: " & colAmount & vbCrLf & "Repayment Year: " & colRepaymentYear & vbCrLf & vbCrLf & "Control Date: " & Format(controlDateValue, "mm/dd/yyyy") & vbCrLf & "Cummins Split Date: 10/03/2025", vbInformation
+    
+    Set srcRange = wsRaw.Range("A1").CurrentRegion
+    
+    MsgBox "Creating FACTORED RECLASS sheet (5 pivot tables)...", vbInformation
+    CreateFactoredReclassSheet_All wbMain, wsRaw, srcRange, controlDateFormatted, controlDateValue, cumSplitDateFormatted, cumSplitDate, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    
+    MsgBox "Creating ACCRUED FACTOR PAY sheet (5 pivot tables)...", vbInformation
+    CreateAccruedFactorPaySheet_All wbMain, wsRaw, srcRange, controlDateFormatted, controlDateValue, cumSplitDateFormatted, cumSplitDate, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    
+    MsgBox "Creating SUMMARY OF REPAYMENT sheet (5 pivots in ONE sheet)...", vbInformation
+    CreateSummaryRepaymentSheet_All wbMain, wsRaw, srcRange, controlDateFormatted, controlDateValue, cumSplitDateFormatted, cumSplitDate, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colAmount
+    
+    MsgBox "Creating summary tables for Factored_Reclass_All sheet...", vbInformation
+    CreateSummaryTableForSheet wbMain.Sheets("Factored_Reclass_All"), wsMapping, Array(0, 0.02, 0.05, 0.1, 0.05)
+    
+    MsgBox "Creating summary tables for Accrued_Factor_Pay_Info sheet...", vbInformation
+    CreateSummaryTableForSheet wbMain.Sheets("Accrued_Factor_Pay_Info"), wsMapping, Array(0, 0.02, 0.05, 0.1, 0.05)
+    
+    wbMain.Sheets("Factored_Reclass_All").Columns.AutoFit
+    wbMain.Sheets("Accrued_Factor_Pay_Info").Columns.AutoFit
+    wbMain.Sheets("Summary_of_Repayment").Columns.AutoFit
+    
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    MsgBox "ALL SHEETS AND SUMMARY TABLES CREATED SUCCESSFULLY!" & vbCrLf & vbCrLf & _
+           "Control Date: " & Format(controlDateValue, "mm/dd/yyyy") & vbCrLf & _
+           "Cummins Split Date: 10/03/2025" & vbCrLf & vbCrLf & _
+           "SHEETS CREATED:" & vbCrLf & _
+           "1. Factored_Reclass_All (5 pivots + 5 summary tables)" & vbCrLf & _
+           "2. Accrued_Factor_Pay_Info (5 pivots + 5 summary tables)" & vbCrLf & _
+           "3. Summary_of_Repayment (5 pivots)" & vbCrLf & vbCrLf & _
+           "Customer Names Used:" & vbCrLf & _
+           "Caterpillar, Cummins, Deere, FCA, Ford, HD, Timken", vbInformation
+    
+    Exit Sub
+    
+ErrHandler:
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    MsgBox "Error: " & Err.Description & vbCrLf & "Error Number: " & Err.Number, vbCritical
+    Exit Sub
+
+Cleanup:
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+End Sub
+
+Sub FindColumnHeaders_All(ws As Worksheet, ByRef colCustomerSimple As String, ByRef colClearingDate As String, ByRef colRepaymentDateYear As String, ByRef colFactoredYearDate As String, ByRef colBusinessArea As String, ByRef colAmount As String, ByRef colRepaymentYear As String)
+    Dim lastCol As Long, i As Long, cellValue As String
+    
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    
+    For i = 1 To lastCol
+        cellValue = Trim(ws.Cells(1, i).Value)
+        
+        If InStr(1, cellValue, "CUSTOMER SIMPLE", vbTextCompare) > 0 Then colCustomerSimple = cellValue
+        If InStr(1, cellValue, "Clearing date", vbTextCompare) > 0 Then colClearingDate = cellValue
+        If InStr(1, cellValue, "Repayment Date with Year", vbTextCompare) > 0 Then colRepaymentDateYear = cellValue
+        If InStr(1, cellValue, "Factored Year with Date", vbTextCompare) > 0 Then colFactoredYearDate = cellValue
+        If InStr(1, cellValue, "Business Area", vbTextCompare) > 0 Then colBusinessArea = cellValue
+        If InStr(1, cellValue, "Amount in doc. curr.", vbTextCompare) > 0 Then colAmount = cellValue
+        If InStr(1, cellValue, "REPAYMENT YEAR", vbTextCompare) > 0 Then colRepaymentYear = cellValue
+    Next i
+End Sub
+
+Sub CreateFactoredReclassSheet_All(wbMain As Workbook, wsRaw As Worksheet, srcRange As Range, controlDateFormatted As String, controlDateValue As Date, cumSplitDateFormatted As String, cumSplitDate As Date, uniqueID As String, colCustomerSimple As String, colClearingDate As String, colRepaymentDateYear As String, colFactoredYearDate As String, colBusinessArea As String, colAmount As String, colRepaymentYear As String)
+    On Error GoTo ErrHandler
+    
+    Dim wsPivot As Worksheet
+    
+    On Error Resume Next
+    Set wsPivot = wbMain.Sheets("Factored_Reclass_All")
+    If Not wsPivot Is Nothing Then
+        Application.DisplayAlerts = False
+        wsPivot.Delete
+        Application.DisplayAlerts = True
+    End If
+    On Error GoTo ErrHandler
+    
+    Set wsPivot = wbMain.Sheets.Add(After:=wbMain.Sheets(wbMain.Sheets.Count))
+    wsPivot.Name = "Factored_Reclass_All"
+    
+    CreateFactoredPivot_All wsPivot, srcRange, 0, 1, "Customers not including Cummins, FCA, Ford", "ExcludeCumminsFCAFord", "", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateFactoredPivot_All wsPivot, srcRange, 40, 2, "Cummins 2% till 10/03/2025", "Cummins", "Till", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateFactoredPivot_All wsPivot, srcRange, 80, 3, "Cummins 5% after 10/03/2025", "Cummins", "After", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateFactoredPivot_All wsPivot, srcRange, 120, 4, "FCA Only", "FCA", "", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateFactoredPivot_All wsPivot, srcRange, 160, 5, "Ford Only", "Ford", "", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error creating Factored sheet: " & Err.Description, vbCritical
+End Sub
+
+Sub CreateFactoredPivot_All(wsPivot As Worksheet, srcRange As Range, rowOffset As Long, pivotIndex As Integer, pivotTitle As String, customerFilter As String, cumPeriod As String, controlDateFormatted As String, controlDateValue As Date, cumSplitDateFormatted As String, uniqueID As String, colCustomerSimple As String, colClearingDate As String, colRepaymentDateYear As String, colFactoredYearDate As String, colBusinessArea As String, colAmount As String, colRepaymentYear As String)
+    On Error GoTo ErrHandler
+    
+    Dim ptCache As PivotCache
+    Dim pt As PivotTable
+    Dim pf As PivotField
+    Dim pi As PivotItem
+    Dim ptName As String
+    Dim factoredYearPos As Integer
+    
+    ptName = "FactP" & CStr(pivotIndex) & "_" & uniqueID
+    
+    Set ptCache = wsPivot.Parent.PivotCaches.Create(xlDatabase, srcRange.Address(External:=True))
+    Set pt = ptCache.CreatePivotTable(wsPivot.Range("A" & (rowOffset + 3)), ptName)
+    
+    wsPivot.Range("A" & (rowOffset + 1)).Value = "SUMMARY OF INVOICES PAID BACK TO M (" & pivotTitle & ")"
+    wsPivot.Range("A" & (rowOffset + 1)).Font.Bold = True
+    wsPivot.Range("A" & (rowOffset + 1)).Font.Size = 12
+    wsPivot.Range("A" & (rowOffset + 1)).Interior.Color = RGB(200, 200, 200)
+    
+    With pt
+        If colRepaymentYear <> "" Then
+            Set pf = .PivotFields(colRepaymentYear)
+            pf.Orientation = xlPageField
+            pf.Position = 1
+        End If
+        
+        factoredYearPos = 0
+        If cumPeriod <> "" And colFactoredYearDate <> "" Then
+            Set pf = .PivotFields(colFactoredYearDate)
+            pf.Orientation = xlPageField
+            pf.Position = 2
+            factoredYearPos = 2
+            FilterFactoredYearDate_All pf, cumSplitDateFormatted, cumPeriod
+        End If
+        
+        Set pf = .PivotFields(colRepaymentDateYear)
+        pf.Orientation = xlPageField
+        If factoredYearPos > 0 Then pf.Position = 3 Else pf.Position = 2
+        FilterRepaymentDate_NotFuture_All pf, controlDateFormatted
+        
+        Set pf = .PivotFields(colClearingDate)
+        pf.Orientation = xlPageField
+        If factoredYearPos > 0 Then pf.Position = 4 Else pf.Position = 3
+        On Error Resume Next
+        pf.CurrentPage = "(blank)"
+        If Err.Number <> 0 Then
+            Err.Clear
+            For Each pi In pf.PivotItems
+                If pi.Name <> "(blank)" And pi.Name <> "" Then pi.Visible = False
+            Next pi
+        End If
+        On Error GoTo ErrHandler
+        
+        Set pf = .PivotFields(colCustomerSimple)
+        pf.Orientation = xlPageField
+        If factoredYearPos > 0 Then pf.Position = 5 Else pf.Position = 4
+        
+        If customerFilter = "ExcludeCumminsFCAFord" Then
+            pf.EnableMultiplePageItems = True
+            For Each pi In pf.PivotItems
+                On Error Resume Next
+                If pi.Name = "Cummins" Or pi.Name = "FCA" Or pi.Name = "Ford" Or pi.Name = "" Then
+                    pi.Visible = False
+                Else
+                    pi.Visible = True
+                End If
+            Next pi
+        Else
+            On Error Resume Next
+            pf.CurrentPage = customerFilter
+            If Err.Number <> 0 Then
+                Err.Clear
+                pf.EnableMultiplePageItems = True
+                For Each pi In pf.PivotItems
+                    If pi.Name = customerFilter Then pi.Visible = True Else pi.Visible = False
+                Next pi
+            End If
+        End If
+        On Error GoTo ErrHandler
+        
+        Set pf = .PivotFields(colBusinessArea)
+        pf.Orientation = xlRowField
+        pf.Position = 1
+        
+        Set pf = .PivotFields(colAmount)
+        pf.Orientation = xlDataField
+        pf.Function = xlSum
+        pf.NumberFormat = "#,##0.00"
+        pf.Name = "Sum of Amount"
+    End With
+    
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error creating Factored pivot '" & pivotTitle & "': " & Err.Description, vbCritical
+End Sub
+
+Sub FilterFactoredYearDate_All(pf As PivotField, cumSplitDateFormatted As String, cumPeriod As String)
+    On Error Resume Next
+    
+    Dim pi As PivotItem
+    Dim itemDateValue As String, itemYear As String, itemMonth As String, itemDay As String
+    Dim itemDateCompare As String
+    
+    pf.EnableMultiplePageItems = True
+    
+    For Each pi In pf.PivotItems
+        itemDateValue = pi.Name
+        
+        If Len(itemDateValue) >= 9 And InStr(itemDateValue, "-") > 0 Then
+            itemYear = Left(itemDateValue, 4)
+            itemMonth = Mid(itemDateValue, 6, 2)
+            itemDay = Right(itemDateValue, 2)
+            itemDateCompare = itemYear & itemMonth & itemDay
+            
+            If cumPeriod = "Till" Then
+                If itemDateCompare <= cumSplitDateFormatted Then pi.Visible = True Else pi.Visible = False
+            ElseIf cumPeriod = "After" Then
+                If itemDateCompare > cumSplitDateFormatted Then pi.Visible = True Else pi.Visible = False
+            End If
+        Else
+            pi.Visible = False
+        End If
+    Next pi
+    
+    On Error GoTo 0
+End Sub
+
+Sub FilterRepaymentDate_NotFuture_All(pf As PivotField, controlDateFormatted As String)
+    On Error Resume Next
+    
+    Dim pi As PivotItem
+    Dim itemDateValue As String, itemYear As String, itemMonth As String, itemDay As String
+    Dim itemDateCompare As String
+    
+    pf.EnableMultiplePageItems = True
+    
+    For Each pi In pf.PivotItems
+        itemDateValue = pi.Name
+        
+        If Len(itemDateValue) >= 9 And InStr(itemDateValue, "-") > 0 Then
+            itemYear = Left(itemDateValue, 4)
+            itemMonth = Mid(itemDateValue, 6, 2)
+            itemDay = Right(itemDateValue, 2)
+            itemDateCompare = itemYear & itemMonth & itemDay
+            
+            If itemDateCompare > controlDateFormatted Then pi.Visible = False Else pi.Visible = True
+        Else
+            pi.Visible = True
+        End If
+    Next pi
+    
+    On Error GoTo 0
+End Sub
+
+Sub CreateAccruedFactorPaySheet_All(wbMain As Workbook, wsRaw As Worksheet, srcRange As Range, controlDateFormatted As String, controlDateValue As Date, cumSplitDateFormatted As String, cumSplitDate As Date, uniqueID As String, colCustomerSimple As String, colClearingDate As String, colRepaymentDateYear As String, colFactoredYearDate As String, colBusinessArea As String, colAmount As String, colRepaymentYear As String)
+    On Error GoTo ErrHandler
+    
+    Dim wsPivot As Worksheet
+    
+    On Error Resume Next
+    Set wsPivot = wbMain.Sheets("Accrued_Factor_Pay_Info")
+    If Not wsPivot Is Nothing Then
+        Application.DisplayAlerts = False
+        wsPivot.Delete
+        Application.DisplayAlerts = True
+    End If
+    On Error GoTo ErrHandler
+    
+    Set wsPivot = wbMain.Sheets.Add(After:=wbMain.Sheets(wbMain.Sheets.Count))
+    wsPivot.Name = "Accrued_Factor_Pay_Info"
+    
+    CreateAccruedPivot_All wsPivot, srcRange, 0, 1, "Customers not including Cummins, FCA, Ford", "ExcludeCumminsFCAFord", "", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateAccruedPivot_All wsPivot, srcRange, 40, 2, "Cummins 2% till 10/03/2025", "Cummins", "Till", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateAccruedPivot_All wsPivot, srcRange, 80, 3, "Cummins 5% after 10/03/2025", "Cummins", "After", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateAccruedPivot_All wsPivot, srcRange, 120, 4, "FCA Only", "FCA", "", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    CreateAccruedPivot_All wsPivot, srcRange, 160, 5, "Ford Only", "Ford", "", controlDateFormatted, controlDateValue, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colBusinessArea, colAmount, colRepaymentYear
+    
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error creating Accrued sheet: " & Err.Description, vbCritical
+End Sub
+
+Sub CreateAccruedPivot_All(wsPivot As Worksheet, srcRange As Range, rowOffset As Long, pivotIndex As Integer, pivotTitle As String, customerFilter As String, cumPeriod As String, controlDateFormatted As String, controlDateValue As Date, cumSplitDateFormatted As String, uniqueID As String, colCustomerSimple As String, colClearingDate As String, colRepaymentDateYear As String, colFactoredYearDate As String, colBusinessArea As String, colAmount As String, colRepaymentYear As String)
+    On Error GoTo ErrHandler
+    
+    Dim ptCache As PivotCache
+    Dim pt As PivotTable
+    Dim pf As PivotField
+    Dim pi As PivotItem
+    Dim ptName As String
+    Dim factoredYearPos As Integer
+    
+    ptName = "AccP" & CStr(pivotIndex) & "_" & uniqueID
+    
+    Set ptCache = wsPivot.Parent.PivotCaches.Create(xlDatabase, srcRange.Address(External:=True))
+    Set pt = ptCache.CreatePivotTable(wsPivot.Range("A" & (rowOffset + 3)), ptName)
+    
+    wsPivot.Range("A" & (rowOffset + 1)).Value = "Invoices paid by customer but not yet due (" & pivotTitle & ")"
+    wsPivot.Range("A" & (rowOffset + 1)).Font.Bold = True
+    wsPivot.Range("A" & (rowOffset + 1)).Font.Size = 12
+    wsPivot.Range("A" & (rowOffset + 1)).Interior.Color = RGB(150, 200, 250)
+    
+    With pt
+        If colRepaymentYear <> "" Then
+            Set pf = .PivotFields(colRepaymentYear)
+            pf.Orientation = xlPageField
+            pf.Position = 1
+        End If
+        
+        factoredYearPos = 0
+        If cumPeriod <> "" And colFactoredYearDate <> "" Then
+            Set pf = .PivotFields(colFactoredYearDate)
+            pf.Orientation = xlPageField
+            pf.Position = 2
+            factoredYearPos = 2
+            FilterFactoredYearDate_All pf, cumSplitDateFormatted, cumPeriod
+        End If
+        
+        Set pf = .PivotFields(colRepaymentDateYear)
+        pf.Orientation = xlPageField
+        If factoredYearPos > 0 Then pf.Position = 3 Else pf.Position = 2
+        FilterRepaymentDate_Future_All pf, controlDateFormatted
+        
+        Set pf = .PivotFields(colClearingDate)
+        pf.Orientation = xlPageField
+        If factoredYearPos > 0 Then pf.Position = 4 Else pf.Position = 3
+        FilterClearingDate_Accrued_All pf, controlDateFormatted, controlDateValue
+        
+        Set pf = .PivotFields(colCustomerSimple)
+        pf.Orientation = xlPageField
+        If factoredYearPos > 0 Then pf.Position = 5 Else pf.Position = 4
+        
+        If customerFilter = "ExcludeCumminsFCAFord" Then
+            pf.EnableMultiplePageItems = True
+            For Each pi In pf.PivotItems
+                On Error Resume Next
+                If pi.Name = "Cummins" Or pi.Name = "FCA" Or pi.Name = "Ford" Or pi.Name = "" Then
+                    pi.Visible = False
+                Else
+                    pi.Visible = True
+                End If
+            Next pi
+        Else
+            On Error Resume Next
+            pf.CurrentPage = customerFilter
+            If Err.Number <> 0 Then
+                Err.Clear
+                pf.EnableMultiplePageItems = True
+                For Each pi In pf.PivotItems
+                    If pi.Name = customerFilter Then pi.Visible = True Else pi.Visible = False
+                Next pi
+            End If
+        End If
+        On Error GoTo ErrHandler
+        
+        Set pf = .PivotFields(colBusinessArea)
+        pf.Orientation = xlRowField
+        pf.Position = 1
+        
+        Set pf = .PivotFields(colAmount)
+        pf.Orientation = xlDataField
+        pf.Function = xlSum
+        pf.NumberFormat = "#,##0.00"
+        pf.Name = "Sum of Amount"
+    End With
+    
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error creating Accrued pivot '" & pivotTitle & "': " & Err.Description, vbCritical
+End Sub
+
+Sub FilterClearingDate_Accrued_All(pf As PivotField, controlDateFormatted As String, controlDateValue As Date)
+    On Error Resume Next
+    
+    Dim pi As PivotItem
+    Dim itemDateValue As String, itemDateCompare As String
+    Dim pivotItemDate As Date
+    
+    pf.EnableMultiplePageItems = True
+    
+    For Each pi In pf.PivotItems
+        itemDateValue = pi.Name
+        
+        If pi.Name = "(blank)" Or pi.Name = "" Then
+            pi.Visible = False
+        ElseIf Len(itemDateValue) >= 9 And InStr(itemDateValue, "-") > 0 Then
+            Dim itemYear As String, itemMonth As String, itemDay As String
+            itemYear = Left(itemDateValue, 4)
+            itemMonth = Mid(itemDateValue, 6, 2)
+            itemDay = Right(itemDateValue, 2)
+            itemDateCompare = itemYear & itemMonth & itemDay
+            
+            If itemDateCompare > controlDateFormatted Then pi.Visible = False Else pi.Visible = True
+        ElseIf IsDate(itemDateValue) Then
+            pivotItemDate = CDate(itemDateValue)
+            If pivotItemDate > controlDateValue Then pi.Visible = False Else pi.Visible = True
+        Else
+            pi.Visible = True
+        End If
+    Next pi
+    
+    On Error GoTo 0
+End Sub
+
+Sub FilterRepaymentDate_Future_All(pf As PivotField, controlDateFormatted As String)
+    On Error Resume Next
+    
+    Dim pi As PivotItem
+    Dim itemDateValue As String, itemYear As String, itemMonth As String, itemDay As String
+    Dim itemDateCompare As String
+    
+    pf.EnableMultiplePageItems = True
+    
+    For Each pi In pf.PivotItems
+        itemDateValue = pi.Name
+        
+        If Len(itemDateValue) >= 9 And InStr(itemDateValue, "-") > 0 Then
+            itemYear = Left(itemDateValue, 4)
+            itemMonth = Mid(itemDateValue, 6, 2)
+            itemDay = Right(itemDateValue, 2)
+            itemDateCompare = itemYear & itemMonth & itemDay
+            
+            If itemDateCompare > controlDateFormatted Then pi.Visible = True Else pi.Visible = False
+        Else
+            pi.Visible = False
+        End If
+    Next pi
+    
+    On Error GoTo 0
+End Sub
+
+Sub CreateSummaryRepaymentSheet_All(wbMain As Workbook, wsRaw As Worksheet, srcRange As Range, controlDateFormatted As String, controlDateValue As Date, cumSplitDateFormatted As String, cumSplitDate As Date, uniqueID As String, colCustomerSimple As String, colClearingDate As String, colRepaymentDateYear As String, colFactoredYearDate As String, colAmount As String)
+    On Error GoTo ErrHandler
+    
+    Dim wsPivot As Worksheet
+    Dim pivotCount As Integer
+    Dim currentRow As Long
+    Dim lastRow As Long
+    
+    pivotCount = 0
+    currentRow = 0
+    
+    On Error Resume Next
+    Set wsPivot = wbMain.Sheets("Summary_of_Repayment")
+    If Not wsPivot Is Nothing Then
+        Application.DisplayAlerts = False
+        wsPivot.Delete
+        Application.DisplayAlerts = True
+    End If
+    On Error GoTo ErrHandler
+    
+    Set wsPivot = wbMain.Sheets.Add(After:=wbMain.Sheets(wbMain.Sheets.Count))
+    wsPivot.Name = "Summary_of_Repayment"
+    
+    ' Pivot 1: All Others (Exclude Cummins, FCA, Ford)
+    On Error Resume Next
+    MsgBox "Creating Pivot 1: Customers not including Cummins, FCA, Ford", vbInformation
+    lastRow = CreateSummaryPivot_All(wsPivot, srcRange, currentRow, 1, "Customers not including Cummins, FCA, Ford", "ExcludeCumminsFCAFord", "", controlDateFormatted, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colAmount)
+    If Err.Number = 0 And lastRow > 0 Then
+        pivotCount = pivotCount + 1
+        MsgBox "Pivot 1 Created Successfully!", vbInformation
+        currentRow = lastRow + 7
+    Else
+        MsgBox "Failed to create Pivot 1: " & Err.Description, vbCritical
+        Err.Clear
+    End If
+    On Error GoTo ErrHandler
+    
+    ' Pivot 2: Cummins 2% till 10/03/2025
+    On Error Resume Next
+    MsgBox "Creating Pivot 2: Cummins 2% till 10/03/2025", vbInformation
+    lastRow = CreateSummaryPivot_All(wsPivot, srcRange, currentRow, 2, "Cummins 2% till 10/03/2025", "Cummins", "Till", controlDateFormatted, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colAmount)
+    If Err.Number = 0 And lastRow > 0 Then
+        pivotCount = pivotCount + 1
+        MsgBox "Pivot 2 Created Successfully!", vbInformation
+        currentRow = lastRow + 7
+    Else
+        MsgBox "Failed to create Pivot 2: " & Err.Description, vbCritical
+        Err.Clear
+    End If
+    On Error GoTo ErrHandler
+    
+    ' Pivot 3: Cummins 5% after 10/03/2025
+    On Error Resume Next
+    MsgBox "Creating Pivot 3: Cummins 5% after 10/03/2025", vbInformation
+    lastRow = CreateSummaryPivot_All(wsPivot, srcRange, currentRow, 3, "Cummins 5% after 10/03/2025", "Cummins", "After", controlDateFormatted, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colAmount)
+    If Err.Number = 0 And lastRow > 0 Then
+        pivotCount = pivotCount + 1
+        MsgBox "Pivot 3 Created Successfully!", vbInformation
+        currentRow = lastRow + 7
+    Else
+        MsgBox "Failed to create Pivot 3: " & Err.Description, vbCritical
+        Err.Clear
+    End If
+    On Error GoTo ErrHandler
+    
+    ' Pivot 4: FCA Only
+    On Error Resume Next
+    MsgBox "Creating Pivot 4: FCA Only", vbInformation
+    lastRow = CreateSummaryPivot_All(wsPivot, srcRange, currentRow, 4, "FCA Only", "FCA", "", controlDateFormatted, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colAmount)
+    If Err.Number = 0 And lastRow > 0 Then
+        pivotCount = pivotCount + 1
+        MsgBox "Pivot 4 Created Successfully!", vbInformation
+        currentRow = lastRow + 7
+    Else
+        MsgBox "Failed to create Pivot 4: " & Err.Description, vbCritical
+        Err.Clear
+    End If
+    On Error GoTo ErrHandler
+    
+    ' Pivot 5: Ford Only
+    On Error Resume Next
+    MsgBox "Creating Pivot 5: Ford Only", vbInformation
+    lastRow = CreateSummaryPivot_All(wsPivot, srcRange, currentRow, 5, "Ford Only", "Ford", "", controlDateFormatted, cumSplitDateFormatted, uniqueID, colCustomerSimple, colClearingDate, colRepaymentDateYear, colFactoredYearDate, colAmount)
+    If Err.Number = 0 And lastRow > 0 Then
+        pivotCount = pivotCount + 1
+        MsgBox "Pivot 5 Created Successfully!", vbInformation
+    Else
+        MsgBox "Failed to create Pivot 5: " & Err.Description, vbCritical
+        Err.Clear
+    End If
+    On Error GoTo ErrHandler
+    
+    MsgBox "All " & pivotCount & " Summary pivots created successfully!", vbInformation
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error creating Summary sheet after " & pivotCount & " pivots: " & Err.Description & vbCrLf & "Error Number: " & Err.Number, vbCritical
+End Sub
+
+Function CreateSummaryPivot_All(wsPivot As Worksheet, srcRange As Range, rowOffset As Long, pivotIndex As Integer, pivotTitle As String, customerFilter As String, cumPeriod As String, controlDateFormatted As String, cumSplitDateFormatted As String, uniqueID As String, colCustomerSimple As String, colClearingDate As String, colRepaymentDateYear As String, colFactoredYearDate As String, colAmount As String) As Long
+    On Error GoTo ErrHandler
+    
+    Dim ptCache As PivotCache
+    Dim pt As PivotTable
+    Dim pf As PivotField
+    Dim pi As PivotItem
+    Dim ptName As String
+    Dim lastRow As Long
+    
+    ptName = "SumPivot" & CStr(pivotIndex) & "_" & uniqueID
+    
+    MsgBox "Creating pivot table: " & ptName & " at row " & (rowOffset + 3), vbInformation
+    
+    Set ptCache = wsPivot.Parent.PivotCaches.Create(xlDatabase, srcRange.Address(External:=True))
+    Set pt = ptCache.CreatePivotTable(wsPivot.Range("A" & (rowOffset + 3)), ptName)
+    
+    wsPivot.Range("A" & (rowOffset + 1)).Value = "SUMMARY OF REPAYMENT BY CUSTOMER (" & pivotTitle & ")"
+    wsPivot.Range("A" & (rowOffset + 1)).Font.Bold = True
+    wsPivot.Range("A" & (rowOffset + 1)).Font.Size = 12
+    wsPivot.Range("A" & (rowOffset + 1)).Interior.Color = RGB(200, 230, 200)
+    
+    With pt
+        Set pf = .PivotFields(colCustomerSimple)
+        pf.Orientation = xlPageField
+        pf.Position = 1
+        
+        If customerFilter = "ExcludeCumminsFCAFord" Then
+            pf.EnableMultiplePageItems = True
+            For Each pi In pf.PivotItems
+                On Error Resume Next
+                If pi.Name = "Cummins" Or pi.Name = "FCA" Or pi.Name = "Ford" Or pi.Name = "" Then
+                    pi.Visible = False
+                Else
+                    pi.Visible = True
+                End If
+            Next pi
+        Else
+            On Error Resume Next
+            pf.CurrentPage = customerFilter
+            If Err.Number <> 0 Then
+                Err.Clear
+                pf.EnableMultiplePageItems = True
+                For Each pi In pf.PivotItems
+                    If pi.Name = customerFilter Then
+                        pi.Visible = True
+                    Else
+                        pi.Visible = False
+                    End If
+                Next pi
+            End If
+        End If
+        On Error GoTo ErrHandler
+        
+        If cumPeriod <> "" And colFactoredYearDate <> "" Then
+            Set pf = .PivotFields(colFactoredYearDate)
+            pf.Orientation = xlPageField
+            FilterFactoredYearDate_Summary_All pf, cumSplitDateFormatted, cumPeriod, controlDateFormatted
+        End If
+        
+        Set pf = .PivotFields(colRepaymentDateYear)
+        pf.Orientation = xlRowField
+        
+        Set pf = .PivotFields(colClearingDate)
+        pf.Orientation = xlColumnField
+        On Error Resume Next
+        For Each pi In pf.PivotItems
+            If pi.Name = "(blank)" Or pi.Name = "" Then
+                pi.Visible = False
+            End If
+        Next pi
+        On Error GoTo ErrHandler
+        
+        Set pf = .PivotFields(colAmount)
+        pf.Orientation = xlDataField
+        pf.Function = xlSum
+        pf.NumberFormat = "#,##0.00"
+        pf.Name = "Sum of Amount"
+    End With
+    
+    lastRow = pt.TableRange2.Rows.Count + rowOffset + 2
+    
+    MsgBox "Pivot " & ptName & " created successfully! Last row: " & lastRow, vbInformation
+    
+    CreateSummaryPivot_All = lastRow
+    Exit Function
+    
+ErrHandler:
+    MsgBox "Error creating Summary pivot '" & pivotTitle & "' (Pivot #" & pivotIndex & "): " & Err.Description & vbCrLf & "Error Number: " & Err.Number, vbCritical
+    CreateSummaryPivot_All = -1
+End Function
+
+Sub FilterFactoredYearDate_Summary_All(pf As PivotField, cumSplitDateFormatted As String, cumPeriod As String, controlDateFormatted As String)
+    On Error Resume Next
+    
+    Dim pi As PivotItem
+    Dim itemDateValue As String, itemYear As String, itemMonth As String, itemDay As String
+    Dim itemDateCompare As String
+    
+    pf.EnableMultiplePageItems = True
+    
+    For Each pi In pf.PivotItems
+        itemDateValue = pi.Name
+        
+        If Len(itemDateValue) >= 9 And InStr(itemDateValue, "-") > 0 Then
+            itemYear = Left(itemDateValue, 4)
+            itemMonth = Mid(itemDateValue, 6, 2)
+            itemDay = Right(itemDateValue, 2)
+            itemDateCompare = itemYear & itemMonth & itemDay
+            
+            If itemDateCompare > controlDateFormatted Then
+                pi.Visible = False
+            ElseIf cumPeriod = "Till" Then
+                If itemDateCompare <= cumSplitDateFormatted Then
+                    pi.Visible = True
+                Else
+                    pi.Visible = False
+                End If
+            ElseIf cumPeriod = "After" Then
+                If itemDateCompare > cumSplitDateFormatted Then
+                    pi.Visible = True
+                Else
+                    pi.Visible = False
+                End If
+            End If
+        Else
+            pi.Visible = False
+        End If
+    Next pi
+    
+    On Error GoTo 0
+End Sub
+
+Sub CreateSummaryTableForSheet(ws As Worksheet, wsMapping As Worksheet, markupPercents As Variant)
+    On Error GoTo ErrHandler
+    
+    Dim pt As PivotTable
+    Dim pivotIndex As Integer
+    Dim startRow As Long
+    Dim lastRow As Long
+    Dim summaryStartCol As Long
+    Dim baValue As String
+    Dim amountValue As Double
+    Dim markupPercent As Double
+    Dim markupValue As Double
+    Dim totalValue As Double
+    Dim mappingCode As String
+    Dim jeCode As String
+    Dim grandTotalAmount As Double
+    Dim grandTotalMarkup As Double
+    Dim grandTotalFinal As Double
+    Dim i As Integer, j As Integer
+    Dim tempPT As PivotTable
+    Dim pivotArray() As PivotTable
+    Dim pivotStartRows() As Long
+    Dim pivotCount As Integer
+    Dim mappingNotFound As Integer
+    
+    pivotCount = 0
+    For Each pt In ws.PivotTables
+        pivotCount = pivotCount + 1
+    Next pt
+    
+    If pivotCount = 0 Then
+        MsgBox "No pivot tables found in " & ws.Name, vbExclamation
+        Exit Sub
+    End If
+    
+    ReDim pivotArray(1 To pivotCount)
+    ReDim pivotStartRows(1 To pivotCount)
+    
+    i = 0
+    For Each pt In ws.PivotTables
+        i = i + 1
+        Set pivotArray(i) = pt
+        pivotStartRows(i) = pt.TableRange1.Row
+    Next pt
+    
+    For i = 1 To pivotCount - 1
+        For j = i + 1 To pivotCount
+            If pivotStartRows(i) > pivotStartRows(j) Then
+                Dim tempRow As Long
+                tempRow = pivotStartRows(i)
+                pivotStartRows(i) = pivotStartRows(j)
+                pivotStartRows(j) = tempRow
+                
+                Set tempPT = pivotArray(i)
+                Set pivotArray(i) = pivotArray(j)
+                Set pivotArray(j) = tempPT
+            End If
+        Next j
+    Next i
+    
+    mappingNotFound = 0
+    
+    For pivotIndex = 1 To pivotCount
+        If pivotIndex > 5 Then Exit For
+        
+        Set pt = pivotArray(pivotIndex)
+        
+        startRow = pt.TableRange1.Row
+        lastRow = pt.TableRange2.Row + pt.TableRange2.Rows.Count - 1
+        
+        summaryStartCol = pt.TableRange2.Column + pt.TableRange2.Columns.Count + 2
+        
+        markupPercent = markupPercents(pivotIndex - 1)
+        
+        grandTotalAmount = 0
+        grandTotalMarkup = 0
+        grandTotalFinal = 0
+        
+        Dim dataRow As Long
+        Dim summaryRow As Long
+        summaryRow = startRow - 1
+        
+        For dataRow = startRow + 1 To lastRow - 1
+            baValue = Trim(ws.Cells(dataRow, pt.TableRange2.Column).Value)
+            
+            Dim col As Long
+            amountValue = 0
+            
+            For col = pt.TableRange2.Column + 1 To pt.TableRange2.Column + pt.TableRange2.Columns.Count - 1
+                If IsNumeric(ws.Cells(dataRow, col).Value) Then
+                    amountValue = ws.Cells(dataRow, col).Value
+                    Exit For
+                End If
+            Next col
+            
+            If Left(baValue, 1) = "P" And amountValue <> 0 Then
+                summaryRow = summaryRow + 1
+                
+                ws.Cells(summaryRow, summaryStartCol).Value = baValue
+                
+                ws.Cells(summaryRow, summaryStartCol + 1).Value = amountValue
+                ws.Cells(summaryRow, summaryStartCol + 1).NumberFormat = "#,##0.00"
+                
+                markupValue = amountValue * markupPercent
+                ws.Cells(summaryRow, summaryStartCol + 2).Value = markupValue
+                ws.Cells(summaryRow, summaryStartCol + 2).NumberFormat = "#,##0.00"
+                
+                totalValue = amountValue - markupValue
+                ws.Cells(summaryRow, summaryStartCol + 3).Value = totalValue
+                ws.Cells(summaryRow, summaryStartCol + 3).NumberFormat = "#,##0.00"
+                
+                mappingCode = GetMappingCode(wsMapping, baValue)
+                jeCode = GetJECode(wsMapping, baValue)
+                
+                If mappingCode = "" Then
+                    mappingNotFound = mappingNotFound + 1
+                    ws.Cells(summaryRow, summaryStartCol + 4).Value = baValue
+                    ws.Cells(summaryRow, summaryStartCol + 5).Value = "NOT FOUND"
+                    ws.Cells(summaryRow, summaryStartCol + 5).Interior.Color = RGB(255, 200, 200)
+                    ws.Cells(summaryRow, summaryStartCol + 6).Value = "NOT FOUND"
+                    ws.Cells(summaryRow, summaryStartCol + 6).Interior.Color = RGB(255, 200, 200)
+                Else
+                    ws.Cells(summaryRow, summaryStartCol + 4).Value = baValue
+                    ws.Cells(summaryRow, summaryStartCol + 5).Value = mappingCode
+                    ws.Cells(summaryRow, summaryStartCol + 6).Value = jeCode
+                End If
+                
+                grandTotalAmount = grandTotalAmount + amountValue
+                grandTotalMarkup = grandTotalMarkup + markupValue
+                grandTotalFinal = grandTotalFinal + totalValue
+            End If
+        Next dataRow
+        
+        If summaryRow >= startRow Then
+            summaryRow = summaryRow + 1
+            
+            ws.Cells(summaryRow, summaryStartCol).Value = "GRAND TOTAL"
+            ws.Cells(summaryRow, summaryStartCol).Font.Bold = True
+            ws.Cells(summaryRow, summaryStartCol).Interior.Color = RGB(200, 230, 200)
+            
+            ws.Cells(summaryRow, summaryStartCol + 1).Value = grandTotalAmount
+            ws.Cells(summaryRow, summaryStartCol + 1).NumberFormat = "#,##0.00"
+            ws.Cells(summaryRow, summaryStartCol + 1).Font.Bold = True
+            ws.Cells(summaryRow, summaryStartCol + 1).Interior.Color = RGB(200, 230, 200)
+            
+            ws.Cells(summaryRow, summaryStartCol + 2).Value = grandTotalMarkup
+            ws.Cells(summaryRow, summaryStartCol + 2).NumberFormat = "#,##0.00"
+            ws.Cells(summaryRow, summaryStartCol + 2).Font.Bold = True
+            ws.Cells(summaryRow, summaryStartCol + 2).Interior.Color = RGB(200, 230, 200)
+            
+            ws.Cells(summaryRow, summaryStartCol + 3).Value = grandTotalFinal
+            ws.Cells(summaryRow, summaryStartCol + 3).NumberFormat = "#,##0.00"
+            ws.Cells(summaryRow, summaryStartCol + 3).Font.Bold = True
+            ws.Cells(summaryRow, summaryStartCol + 3).Interior.Color = RGB(200, 230, 200)
+            
+            ws.Range(ws.Cells(startRow, summaryStartCol), ws.Cells(summaryRow, summaryStartCol + 6)).BorderAround Weight:=xlMedium
+            
+            MsgBox "Pivot " & pivotIndex & " summary table created!" & vbCrLf & _
+                   "Rows processed: " & (summaryRow - startRow) & vbCrLf & _
+                   "Grand Total: " & Format(grandTotalFinal, "$#,##0.00"), vbInformation
+        Else
+            MsgBox "No data found in Pivot " & pivotIndex, vbExclamation
+        End If
+    Next pivotIndex
+    
+    If mappingNotFound > 0 Then
+        MsgBox "Warning: " & mappingNotFound & " mapping codes not found in mapping sheet!", vbExclamation
+    End If
+    
+    ws.Columns.AutoFit
+    
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error creating summary table for " & ws.Name & ": " & Err.Description & vbCrLf & "Error Number: " & Err.Number, vbCritical
+End Sub
+
+Function GetMappingCode(wsMapping As Worksheet, businessArea As String) As String
+    On Error Resume Next
+    
+    Dim lastRow As Long
+    Dim i As Long
+    Dim baValue As String
+    
+    lastRow = wsMapping.Cells(wsMapping.Rows.Count, "A").End(xlUp).Row
+    
+    For i = 2 To lastRow
+        baValue = Trim(wsMapping.Cells(i, 1).Value)
+        If baValue = businessArea Then
+            GetMappingCode = Trim(wsMapping.Cells(i, 5).Value)
+            Exit Function
+        End If
+    Next i
+    
+    GetMappingCode = ""
+    
+    On Error GoTo 0
+End Function
+
+Function GetJECode(wsMapping As Worksheet, businessArea As String) As String
+    On Error Resume Next
+    
+    Dim lastRow As Long
+    Dim i As Long
+    Dim baValue As String
+    
+    lastRow = wsMapping.Cells(wsMapping.Rows.Count, "A").End(xlUp).Row
+    
+    For i = 2 To lastRow
+        baValue = Trim(wsMapping.Cells(i, 1).Value)
+        If baValue = businessArea Then
+            GetJECode = Trim(wsMapping.Cells(i, 3).Value)
+            Exit Function
+        End If
+    Next i
+    
+    GetJECode = ""
+    
+    On Error GoTo 0
+End Function
+
