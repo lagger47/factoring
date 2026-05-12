@@ -1,0 +1,234 @@
+Option Explicit
+
+Sub ProcessAndSaveAsNewFile()
+    Dim wbRaw As Workbook, wbRef As Workbook
+    Dim wsRaw As Worksheet, wsRef As Worksheet
+    Dim rawPath As String, refPath As String, newFilePath As String
+    
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    
+    On Error GoTo ErrHandler
+    
+    ' ================= 1. SELECT RAW FILE =================
+    rawPath = GetFilePath("Select Raw Data File", "*.xlsx; *.xls; *.xlsb")
+    If rawPath = "" Then GoTo UserCancel
+    Set wbRaw = Workbooks.Open(rawPath, ReadOnly:=True, UpdateLinks:=False)
+    Set wsRaw = wbRaw.Sheets(1)
+    
+    ' ================= 2. INSERT COLUMNS & HEADERS =================
+    Call InsertRequiredColumns(wsRaw)
+    
+    ' ================= 3. SELECT REFERENCE FILE =================
+    refPath = GetFilePath("Select Reference File for VLOOKUP", "*.xlsx; *.xls; *.xlsb")
+    If refPath = "" Then GoTo UserCancel
+    Set wbRef = Workbooks.Open(refPath, ReadOnly:=True, UpdateLinks:=False)
+    Set wsRef = wbRef.Sheets(1)
+    
+    ' ================= 4. PROCESS & MAP DATA =================
+    Call ProcessDataWithArrays(wsRaw, wsRef)
+    
+    ' ================= 5. FILL BLANKS FROM REFERENCE KEY 1 =================
+    Call FillBlanksFromRefKey(wsRaw)
+    
+    ' ================= 6. SAVE AS NEW FILE =================
+    newFilePath = Left(rawPath, InStrRev(rawPath, ".") - 1) & "_Processed.xlsx"
+    wbRaw.SaveAs Filename:=newFilePath, FileFormat:=xlOpenXMLWorkbook, CreateBackup:=False
+    wbRaw.Close SaveChanges:=False
+    wbRef.Close SaveChanges:=False
+    
+    Application.DisplayAlerts = True
+    MsgBox "? Processing complete!" & vbCrLf & "Saved as: " & newFilePath, vbInformation
+    GoTo Cleanup
+
+UserCancel:
+    MsgBox "Operation cancelled by user.", vbExclamation
+    GoTo Cleanup
+
+ErrHandler:
+    MsgBox "? Error: " & Err.Description, vbCritical
+    GoTo Cleanup
+
+Cleanup:
+    On Error Resume Next
+    If Not wbRef Is Nothing Then wbRef.Close SaveChanges:=False
+    If Not wbRaw Is Nothing Then wbRaw.Close SaveChanges:=False
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+End Sub
+
+' ================= HELPER: FILE DIALOG =================
+Function GetFilePath(title As String, filter As String) As String
+    Dim fd As Object
+    Set fd = Application.FileDialog(3) ' msoFileDialogFilePicker
+    fd.title = title
+    fd.Filters.Clear
+    fd.Filters.Add "Excel Files", filter
+    If fd.Show = -1 Then GetFilePath = fd.SelectedItems(1)
+End Function
+
+' ================= HELPER: INSERT COLUMNS =================
+Sub InsertRequiredColumns(ws As Worksheet)
+    Dim hdrs As Variant
+    hdrs = Array("CUSTOMER SIMPLE", "Factored Date", "Repayment Date", "FACTORED YEAR", _
+                 "Factored Year with Date", "REPAYMENT YEAR", "Repayment Date with Year")
+                 
+    ws.Columns("C").Insert Shift:=xlToRight
+    ws.Cells(1, "C").Value = hdrs(0)
+    
+    ws.Range("S:X").Insert Shift:=xlToRight
+    ws.Range("S1:X1").Value = Array(hdrs(1), hdrs(2), hdrs(3), hdrs(4), hdrs(5), hdrs(6))
+End Sub
+
+' ================= HELPER: ARRAY PROCESSING (VLOOKUP) =================
+Sub ProcessDataWithArrays(wsRaw As Worksheet, wsRef As Worksheet)
+    Dim lastRowRaw As Long, lastRowRef As Long
+    Dim dataRaw As Variant, dataRef As Variant
+    Dim dictMap As Object, dictRef As Object
+    Dim i As Long, j As Long
+    Dim colAcct As Long, colCustSim As Long, colDocNum As Long, colFactored As Long
+    Dim refDocCol As Long, refCols(1 To 6) As Long
+    Dim keyVal As String, tempArr(1 To 6) As Variant
+    Dim foundRange As Range
+    
+    ' Find column indices
+    Set foundRange = wsRaw.Rows(1).Find("Account", LookIn:=xlValues, LookAt:=xlWhole)
+    If foundRange Is Nothing Then Err.Raise 10001, , "Header 'Account' not found in raw file."
+    colAcct = foundRange.Column
+    
+    Set foundRange = wsRaw.Rows(1).Find("CUSTOMER SIMPLE", LookIn:=xlValues, LookAt:=xlWhole)
+    If foundRange Is Nothing Then Err.Raise 10002, , "Header 'CUSTOMER SIMPLE' not found."
+    colCustSim = foundRange.Column
+    
+    Set foundRange = wsRaw.Rows(1).Find("Document Number", LookIn:=xlValues, LookAt:=xlWhole)
+    If foundRange Is Nothing Then Err.Raise 10003, , "Header 'Document Number' not found in raw file."
+    colDocNum = foundRange.Column
+    
+    Set foundRange = wsRaw.Rows(1).Find("Factored Date", LookIn:=xlValues, LookAt:=xlWhole)
+    If foundRange Is Nothing Then Err.Raise 10004, , "Header 'Factored Date' not found."
+    colFactored = foundRange.Column
+    
+    ' Load raw data
+    lastRowRaw = wsRaw.Cells(wsRaw.Rows.Count, "A").End(xlUp).Row
+    dataRaw = wsRaw.Range("A1:X" & lastRowRaw).Value
+    
+    ' Load customer mapping
+    Dim wsMap As Worksheet, mapData As Variant
+    On Error Resume Next
+    Set wsMap = ThisWorkbook.Sheets("custmapping")
+    On Error GoTo 0
+    If wsMap Is Nothing Then Err.Raise 10005, , "Mapping sheet 'custmapping' not found in macro workbook."
+    
+    mapData = wsMap.Range("A1:C" & wsMap.Cells(wsMap.Rows.Count, "A").End(xlUp).Row).Value
+    Set dictMap = CreateObject("Scripting.Dictionary")
+    
+    For i = 2 To UBound(mapData, 1)
+        keyVal = CStr(mapData(i, 1))
+        If keyVal <> "" And Not dictMap.Exists(keyVal) Then
+            dictMap.Add keyVal, mapData(i, 3)
+        End If
+    Next i
+    
+    ' Apply customer mapping
+    For i = 2 To UBound(dataRaw, 1)
+        keyVal = CStr(dataRaw(i, colAcct))
+        If dictMap.Exists(keyVal) Then dataRaw(i, colCustSim) = dictMap(keyVal)
+    Next i
+    
+    ' Load reference file data
+    lastRowRef = wsRef.Cells(wsRef.Rows.Count, "A").End(xlUp).Row
+    dataRef = wsRef.Range("A1").Resize(lastRowRef, wsRef.Cells(1, wsRef.Columns.Count).End(xlToLeft).Column).Value
+    
+    refDocCol = wsRef.Rows(1).Find("Document Number", LookIn:=xlValues, LookAt:=xlWhole).Column
+    If refDocCol = 0 Then Err.Raise 10006, , "Header 'Document Number' not found in reference file."
+    
+    Dim hdrsRef As Variant
+    hdrsRef = Array("Factored Date", "Repayment Date", "FACTORED YEAR", "Factored Year with Date", "REPAYMENT YEAR", "Repayment Date with Year")
+    For j = 1 To 6
+        Dim c As Range
+        Set c = wsRef.Rows(1).Find(hdrsRef(j - 1), LookIn:=xlValues, LookAt:=xlWhole)
+        If c Is Nothing Then Err.Raise 10007, , "Header '" & hdrsRef(j - 1) & "' not found in reference file."
+        refCols(j) = c.Column
+    Next j
+    
+    Set dictRef = CreateObject("Scripting.Dictionary")
+    For i = 2 To UBound(dataRef, 1)
+        keyVal = CStr(dataRef(i, refDocCol))
+        If keyVal <> "" And Not dictRef.Exists(keyVal) Then
+            For j = 1 To 6: tempArr(j) = dataRef(i, refCols(j)): Next j
+            dictRef.Add keyVal, tempArr
+        End If
+    Next i
+    
+    ' Apply reference lookup
+    Dim vals() As Variant
+    For i = 2 To UBound(dataRaw, 1)
+        keyVal = CStr(dataRaw(i, colDocNum))
+        If dictRef.Exists(keyVal) Then
+            vals = dictRef(keyVal)
+            For j = 1 To 6: dataRaw(i, colFactored + j - 1) = vals(j): Next j
+        End If
+    Next i
+    
+    ' Write back to sheet
+    wsRaw.Range("A1:X" & lastRowRaw).Value = dataRaw
+End Sub
+
+' ================= NEW HELPER: FILL BLANKS FROM REFERENCE KEY 1 =================
+Sub FillBlanksFromRefKey(ws As Worksheet)
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, "R").End(xlUp).Row ' R = Reference Key 1
+    If lastRow < 2 Then Exit Sub
+    
+    ' Load R:X into array (R=1, S=2, T=3, U=4, V=5, W=6, X=7)
+    Dim dataArr As Variant
+    dataArr = ws.Range("R1:X" & lastRow).Value
+    
+    ' Ensure S & T preserve leading zeros
+    ws.Columns("S:T").NumberFormat = "@"
+    
+    Dim currentYear As String
+    currentYear = "2026" ' Change to CStr(Year(Date)) for dynamic year
+    
+    Dim i As Long, refVal As String, parts() As String
+    Dim num1 As String, num2 As String
+    
+    For i = 2 To UBound(dataArr, 1)
+        ' Only fill if Column S (index 2) is blank
+        If Trim(dataArr(i, 2)) = "" Then
+            refVal = Trim(CStr(dataArr(i, 1))) ' Column R
+            If InStr(refVal, "-") > 0 Then
+                parts = Split(refVal, "-")
+                num1 = ExtractDigits(Trim(parts(0)))
+                num2 = ExtractDigits(Trim(parts(1)))
+                
+                If num1 <> "" And num2 <> "" Then
+                    dataArr(i, 2) = num1
+                    dataArr(i, 3) = num2
+                    dataArr(i, 4) = currentYear
+                    dataArr(i, 5) = currentYear & "-" & num1
+                    dataArr(i, 6) = currentYear
+                    dataArr(i, 7) = currentYear & "-" & num2
+                End If
+            End If
+        End If
+    Next i
+    
+    ' Write back
+    ws.Range("R1:X" & lastRow).Value = dataArr
+End Sub
+
+' ================= HELPER: EXTRACT DIGITS ONLY =================
+Private Function ExtractDigits(txt As String) As String
+    Dim i As Long, ch As String, res As String
+    For i = 1 To Len(txt)
+        ch = Mid(txt, i, 1)
+        If ch >= "0" And ch <= "9" Then res = res & ch
+    Next i
+    ExtractDigits = res
+End Function
+
