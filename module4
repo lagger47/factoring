@@ -1,0 +1,303 @@
+Option Explicit
+
+Sub CreateJETablesBesideSummary_NewRegion()
+    On Error GoTo ErrHandler
+    
+    Dim wbMain As Workbook
+    Dim wbSelected As Workbook
+    Dim wsFactored As Worksheet
+    Dim wsAccrued As Worksheet
+    Dim selectedFilePath As String
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    ' Let user select the file
+    selectedFilePath = Application.GetOpenFilename( _
+        FileFilter:="Excel Files (*.xls;*.xlsx;*.xlsm),*.xls;*.xlsx;*.xlsm", _
+        title:="Select the file with Summary Tables", _
+        MultiSelect:=False)
+    
+    ' Check if user cancelled
+    If selectedFilePath = "False" Then
+        MsgBox "No file selected. Process cancelled.", vbExclamation
+        GoTo Cleanup
+    End If
+    
+    ' Open the selected workbook
+    Set wbSelected = Workbooks.Open(selectedFilePath)
+    Set wbMain = wbSelected
+    
+    ' Check if sheets exist
+    On Error Resume Next
+    Set wsFactored = wbMain.Sheets("Factored_Reclass_All")
+    Set wsAccrued = wbMain.Sheets("Accrued_Factor_Pay_Info")
+    On Error GoTo ErrHandler
+    
+    If wsFactored Is Nothing Or wsAccrued Is Nothing Then
+        MsgBox "One or more sheets not found in the selected file!" & vbCrLf & vbCrLf & _
+               "Please ensure the file contains:" & vbCrLf & _
+               "1. Factored_Reclass_All sheet" & vbCrLf & _
+               "2. Accrued_Factor_Pay_Info sheet" & vbCrLf & vbCrLf & _
+               "These sheets should have summary tables with 'GRAND TOTAL' in column E.", vbCritical
+        GoTo Cleanup
+    End If
+    
+    MsgBox "Creating JE tables for Factored_Reclass_All sheet...", vbInformation
+    CreateJETableForSheet_NewRegion wsFactored, "Factored"
+    
+    MsgBox "Creating JE tables for Accrued_Factor_Pay_Info sheet...", vbInformation
+    CreateJETableForSheet_NewRegion wsAccrued, "Accrued"
+    
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    MsgBox "ALL JE TABLES CREATED SUCCESSFULLY!" & vbCrLf & vbCrLf & _
+           "File: " & wbMain.Name & vbCrLf & vbCrLf & _
+           "Sheets Processed:" & vbCrLf & _
+           "1. Factored_Reclass_All (4 JE tables)" & vbCrLf & _
+           "2. Accrued_Factor_Pay_Info (4 JE tables)" & vbCrLf & vbCrLf & _
+           "JE Format:" & vbCrLf & _
+           "Factored: Credit 1019000, Debit 1050302, Debit 1022053" & vbCrLf & _
+           "Accrued: Debit 1019000, Credit 1050302, Credit 2635300" & vbCrLf & vbCrLf & _
+           "Markup Percentages:" & vbCrLf & _
+           "Pivot 1: 5%" & vbCrLf & _
+           "Pivot 2: 25%" & vbCrLf & _
+           "Pivot 3: 5%" & vbCrLf & _
+           "Pivot 4: 30%" & vbCrLf & vbCrLf & _
+           "Note: Individual JE lines skipped when value is 0" & vbCrLf & _
+           "Blank rows added after each JE table to prevent overlap", vbInformation
+    
+    Exit Sub
+    
+ErrHandler:
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    MsgBox "Error: " & Err.Description & vbCrLf & "Error Number: " & Err.Number, vbCritical
+    Exit Sub
+
+Cleanup:
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+End Sub
+
+Sub CreateJETableForSheet_NewRegion(ws As Worksheet, sheetType As String)
+    On Error GoTo ErrHandler
+    
+    Dim summaryStartCol As Long
+    Dim jeStartCol As Long
+    Dim startRow As Long
+    Dim lastRow As Long
+    Dim jeRow As Long
+    Dim baValue As String
+    Dim amountValue As Double
+    Dim markupValue As Double
+    Dim totalValue As Double
+    Dim mappingCode As String
+    Dim jeCode As String
+    Dim i As Long
+    Dim j As Long
+    Dim creditAccount As String
+    Dim debitAccount1 As String
+    Dim debitAccount2 As String
+    Dim foundTables As Integer
+    Dim tableStartRow As Long
+    Dim tableEndRow As Long
+    Dim blankRows As Long
+    
+    ' Set account numbers based on sheet type
+    If sheetType = "Factored" Then
+        creditAccount = "1019000"
+        debitAccount1 = "1050302"
+        debitAccount2 = "1022053"
+    Else
+        creditAccount = "1019000"
+        debitAccount1 = "1050302"
+        debitAccount2 = "2635300"
+    End If
+    
+    ' Summary table starts at column E (5)
+    summaryStartCol = 5
+    
+    ' JE table starts 2 columns after summary table
+    jeStartCol = 14
+    
+    foundTables = 0
+    
+    ' Find all summary tables by searching for "GRAND TOTAL" in column E
+    For i = 1 To ws.Cells(ws.Rows.Count, "E").End(xlUp).Row
+        If InStr(ws.Cells(i, "E").Value, "GRAND TOTAL") > 0 Then
+            foundTables = foundTables + 1
+            
+            ' Found a summary table end, now find its start
+            tableEndRow = i
+            tableStartRow = i
+            
+            ' Go up to find the first data row (starts with P)
+            For j = i - 1 To 1 Step -1
+                baValue = Trim(ws.Cells(j, summaryStartCol).Value)
+                If Left(baValue, 1) = "P" Then
+                    tableStartRow = j
+                ElseIf baValue = "" Or InStr(baValue, "Sum of Amount") > 0 Then
+                    tableStartRow = j + 1
+                    Exit For
+                End If
+            Next j
+            
+            ' Create JE header (3 rows above table start)
+            ws.Cells(tableStartRow - 3, jeStartCol).Value = foundTables
+            ws.Cells(tableStartRow - 3, jeStartCol + 1).Value = 40
+            ws.Cells(tableStartRow - 3, jeStartCol + 2).Value = 40
+            ws.Cells(tableStartRow - 3, jeStartCol).Font.Bold = True
+            ws.Cells(tableStartRow - 3, jeStartCol + 1).Font.Bold = True
+            ws.Cells(tableStartRow - 3, jeStartCol + 2).Font.Bold = True
+            
+            If sheetType = "Factored" Then
+                ws.Cells(tableStartRow - 2, jeStartCol).Value = "Credit to " & creditAccount
+                ws.Cells(tableStartRow - 2, jeStartCol + 1).Value = "Debit to " & debitAccount1
+                ws.Cells(tableStartRow - 2, jeStartCol + 2).Value = "Debit to " & debitAccount2
+            Else
+                ws.Cells(tableStartRow - 2, jeStartCol).Value = "Debit to " & creditAccount
+                ws.Cells(tableStartRow - 2, jeStartCol + 1).Value = "Credit to " & debitAccount1
+                ws.Cells(tableStartRow - 2, jeStartCol + 2).Value = "Credit to " & debitAccount2
+            End If
+            
+            ws.Cells(tableStartRow - 2, jeStartCol).Font.Bold = True
+            ws.Cells(tableStartRow - 2, jeStartCol + 1).Font.Bold = True
+            ws.Cells(tableStartRow - 2, jeStartCol + 2).Font.Bold = True
+            
+            ws.Cells(tableStartRow - 1, jeStartCol).Value = "Sum of Amount in doc. curr."
+            ws.Cells(tableStartRow - 1, jeStartCol + 1).Value = GetMarkupPercent_NewRegion(foundTables)
+            ws.Cells(tableStartRow - 1, jeStartCol).Font.Bold = True
+            ws.Cells(tableStartRow - 1, jeStartCol + 1).Interior.Color = RGB(255, 255, 0)
+            
+            ' Process each row in the summary table
+            jeRow = tableStartRow
+            Dim creditTotal As Double, debit1Total As Double, debit2Total As Double
+            Dim linesCreated As Integer
+            creditTotal = 0
+            debit1Total = 0
+            debit2Total = 0
+            
+            For j = tableStartRow To tableEndRow - 1
+                baValue = ws.Cells(j, summaryStartCol).Value
+                amountValue = ws.Cells(j, summaryStartCol + 1).Value
+                markupValue = ws.Cells(j, summaryStartCol + 2).Value
+                totalValue = ws.Cells(j, summaryStartCol + 3).Value
+                mappingCode = ws.Cells(j, summaryStartCol + 5).Value
+                jeCode = ws.Cells(j, summaryStartCol + 6).Value
+                
+                ' Check if it's a valid data row (starts with P and has numeric amount)
+                If Left(baValue, 1) = "P" And IsNumeric(amountValue) Then
+                    linesCreated = 0
+                    
+                    ' Row 1: Credit/Debit to 1019000 (full amount) - ONLY if amount <> 0
+                    If amountValue <> 0 Then
+                        ws.Cells(jeRow, jeStartCol).Value = baValue
+                        ws.Cells(jeRow, jeStartCol + 1).Value = creditAccount
+                        ws.Cells(jeRow, jeStartCol + 2).Value = amountValue
+                        ws.Cells(jeRow, jeStartCol + 2).NumberFormat = "$#,##0.00"
+                        ws.Cells(jeRow, jeStartCol + 3).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+                        ws.Cells(jeRow, jeStartCol + 3).NumberFormat = "0.00"
+                        ws.Cells(jeRow, jeStartCol + 4).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+                        ws.Cells(jeRow, jeStartCol + 4).NumberFormat = "0.00"
+                        ws.Cells(jeRow, jeStartCol + 5).Value = mappingCode
+                        ws.Cells(jeRow, jeStartCol + 6).Value = jeCode
+                        
+                        creditTotal = creditTotal + amountValue
+                        jeRow = jeRow + 1
+                        linesCreated = linesCreated + 1
+                    End If
+                    
+                    ' Row 2: Debit/Credit to 1050302 (markup) - ONLY if markup <> 0
+                    If markupValue <> 0 Then
+                        ws.Cells(jeRow, jeStartCol).Value = baValue
+                        ws.Cells(jeRow, jeStartCol + 1).Value = debitAccount1
+                        ws.Cells(jeRow, jeStartCol + 2).Value = markupValue
+                        ws.Cells(jeRow, jeStartCol + 2).NumberFormat = "$#,##0.00"
+                        ws.Cells(jeRow, jeStartCol + 3).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+                        ws.Cells(jeRow, jeStartCol + 3).NumberFormat = "0.00"
+                        ws.Cells(jeRow, jeStartCol + 4).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+                        ws.Cells(jeRow, jeStartCol + 4).NumberFormat = "0.00"
+                        ws.Cells(jeRow, jeStartCol + 5).Value = mappingCode
+                        ws.Cells(jeRow, jeStartCol + 6).Value = jeCode
+                        
+                        debit1Total = debit1Total + markupValue
+                        jeRow = jeRow + 1
+                        linesCreated = linesCreated + 1
+                    End If
+                    
+                    ' Row 3: Debit/Credit to 1022053/2635300 (total) - ONLY if total <> 0
+                    If totalValue <> 0 Then
+                        ws.Cells(jeRow, jeStartCol).Value = baValue
+                        ws.Cells(jeRow, jeStartCol + 1).Value = debitAccount2
+                        ws.Cells(jeRow, jeStartCol + 2).Value = totalValue
+                        ws.Cells(jeRow, jeStartCol + 2).NumberFormat = "$#,##0.00"
+                        ws.Cells(jeRow, jeStartCol + 3).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+                        ws.Cells(jeRow, jeStartCol + 3).NumberFormat = "0.00"
+                        ws.Cells(jeRow, jeStartCol + 4).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+                        ws.Cells(jeRow, jeStartCol + 4).NumberFormat = "0.00"
+                        ws.Cells(jeRow, jeStartCol + 5).Value = mappingCode
+                        ws.Cells(jeRow, jeStartCol + 6).Value = jeCode
+                        
+                        debit2Total = debit2Total + totalValue
+                        jeRow = jeRow + 1
+                        linesCreated = linesCreated + 1
+                    End If
+                End If
+            Next j
+            
+            ' Add totals row
+            ws.Cells(jeRow, jeStartCol).Value = ""
+            ws.Cells(jeRow, jeStartCol + 1).Value = ""
+            ws.Cells(jeRow, jeStartCol + 2).Value = creditTotal
+            ws.Cells(jeRow, jeStartCol + 2).NumberFormat = "$#,##0.00"
+            ws.Cells(jeRow, jeStartCol + 2).Font.Bold = True
+            ws.Cells(jeRow, jeStartCol + 3).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+            ws.Cells(jeRow, jeStartCol + 3).NumberFormat = "0.00"
+            ws.Cells(jeRow, jeStartCol + 3).Font.Bold = True
+            ws.Cells(jeRow, jeStartCol + 4).Formula = "=ROUND(" & ws.Cells(jeRow, jeStartCol + 2).Address(False, False) & ",2)"
+            ws.Cells(jeRow, jeStartCol + 4).NumberFormat = "0.00"
+            ws.Cells(jeRow, jeStartCol + 4).Font.Bold = True
+            
+            ' ADD BLANK ROWS AFTER JE TABLE TO PREVENT OVERLAP
+            Dim k As Long
+            blankRows = 5
+            For k = 1 To blankRows
+                ws.Cells(jeRow + k, jeStartCol).Value = ""
+            Next k
+            
+            MsgBox "JE table created for Pivot " & foundTables & vbCrLf & _
+                   "Total: " & Format(creditTotal, "$#,##0.00"), vbInformation
+        End If
+    Next i
+    
+    If foundTables = 0 Then
+        MsgBox "No summary tables found in " & ws.Name & vbCrLf & _
+               "Please ensure summary tables have 'GRAND TOTAL' in column E", vbExclamation
+    Else
+        MsgBox "Created " & foundTables & " JE tables in " & ws.Name & vbCrLf & _
+               "Individual JE lines skipped when value is 0" & vbCrLf & _
+               "Blank rows added after each JE table to prevent overlap", vbInformation
+    End If
+    
+    ' Auto-fit columns
+    ws.Columns.AutoFit
+    
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error creating JE table for " & ws.Name & ": " & Err.Description & vbCrLf & "Error Number: " & Err.Number, vbCritical
+End Sub
+
+Function GetMarkupPercent_NewRegion(pivotIndex As Integer) As String
+    ' New region percentages: 5%, 25%, 5%, 30%
+    Select Case pivotIndex
+        Case 1: GetMarkupPercent_NewRegion = "5.00%"
+        Case 2: GetMarkupPercent_NewRegion = "25.00%"
+        Case 3: GetMarkupPercent_NewRegion = "5.00%"
+        Case 4: GetMarkupPercent_NewRegion = "30.00%"
+        Case Else: GetMarkupPercent_NewRegion = "5.00%"
+    End Select
+End Function
+
