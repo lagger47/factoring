@@ -1,0 +1,7 @@
+Line Company Code	Business Area	Account	Posting Key	Special GL Indicator	Baseline Date	Amount	Tax Code	Tax Jurisdiction Code	Calculate Tax	Trading Partner	Cost Center	Profit Center	Segment	Partner Segment	WBS Element	Order	Assignment	Value Date	Settlement Period	Long Text	Not mapped	Transaction Type(Asset)	Plant	Purchasing Document	Item # of Purchasing Doc.	Material	Production Quantity	Unit of Measure	JV Partner	Personnel Number	Joint Venture	Recovery Indicator	Equity Group	Production Month (Service Date)	Group Amount	Payment Method	Payment Term
+	P201	1019000	40			5745.60						P10911201	BLACKBRG																								
+	P201	1050302	50			114.91						P10911201	BLACKBRG																								
+	P201	2635300	50			5630.69						P10911201	BLACKBRG																								
+	P202	1019000	40			62655.96						P10911202	GREENVLE																								
+	P202	1050302	50			1253.12						P10911202	GREENVLE																								
+	P202	2635300	50			61402.84						P10911202	GREENVLE																								
